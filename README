@@ -1,0 +1,35 @@
+install_config_files.py is a script that allows you to keep your config files is a separate directory, and helps you creating symlinks to them.
+
+GLOSSARY:
+original directory: the directory your config files originally shared in common, i.e: your home dir
+config directory: the (new) directory to keep config files
+data directory: a config directory you want to link. see below
+
+
+
+How to keep config files in a separate directory:
+    -create an empty directory
+    -move each config file you want to it, keeping the path (relative to the original directory). Example: move "/home/user/.config/program/settings.conf" to "newdir/.config/program/settings.conf"
+
+After a config directory is created, name it "config", and copy the script to it's parent directory.
+
+
+
+The script processes each directory and file inside "config". It takes the following actions (python-pseudocode):
+    For a directory:
+        if it's a "data directory":
+            treat directory as file
+        else:
+            mkdir if inexistent in original directory
+            recurse into it
+    for a file:
+        backup if existent in original directory
+        symlink it to the original directory
+        
+It also takes the following precations:
+    check for broken, existing, and outdated links
+
+On some circunstances, it might be desirable to link whole directories, instead of single files - for example, if you have dynamic file names
+(a directory with logs, etc). These directories shall be known as "data directories", and, to enable the program to recognize them, the extension "..install_config_files_DATA" shall be appended.
+
+--gpp
