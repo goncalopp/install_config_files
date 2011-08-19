@@ -5,6 +5,7 @@ DATA_EXTENSION= ".install_config_files_DATA"
 DIR1= "."
 DIR2= os.path.expanduser("~/")
 
+
 def is_data_dir(d):
     n= len(DATA_EXTENSION)
     ret= (d[-n:]==DATA_EXTENSION)
@@ -40,10 +41,9 @@ def already_done(f1, f2):
             return True
     return False
 
-def process_directory(d1):
+def process_directory(d1, d2):
     assert os.path.isdir(d1)
     logging.debug("processing directory "+d1)
-    d2= analog_path( d1 )
     test_and_remove_broken_link(d2)
     if already_done(d1,d2):
         logging.warn("Link detected on directory, but the config files don't indicate it as a data directory. removing old link: "+d2)
@@ -57,9 +57,8 @@ def process_directory(d1):
             raise Exception("conflict: config has a directory, home has a plain file\n"+d2)
         pass    #dir in config has equivalent dir in home, do nothing
 
-def process_file(f1):
+def process_file(f1, f2):
     logging.debug("processing file "+f1)
-    f2= analog_path(f1)
     test_and_remove_broken_link(f2)
     if already_done(f1,f2):
         return
@@ -80,14 +79,16 @@ def recurse(basepath):
     directories= filter(os.path.isdir, all_files)
     
     for f in files:
-        process_file( f )
+        f2= analog_path(f)
+        process_file( f, f2 )
     
     for d in directories:
+        d2= analog_path(d)
         if is_data_dir(d):
             #if d is a data directory, treat is at a file
-            process_file( d )
+            process_file( d, d2 )
         else:
-            process_directory( d )
+            process_directory( d, d2 )
             recurse(d)
 
 
