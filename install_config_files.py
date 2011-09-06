@@ -1,11 +1,11 @@
 #!/usr/bin/python
 import os, shutil
 import logging
+import argparse
 
 DATA_EXTENSION= ".install_config_files_DATA"
 BACKUP_EXTENSION= ".config_backup"
-DIR1= "."
-DIR2= os.path.expanduser("~/")
+
 
 
 class FileType(object):
@@ -72,7 +72,7 @@ class FileType(object):
 
     def mkdir(self):
         os.mkdir(self.path())
-        self.filetype=DIRECTORY
+        self.filetype= self.DIRECTORY
 
     def rm(self):
         if self.isDir():
@@ -84,14 +84,12 @@ class FileType(object):
         self.filetype= self.INEXISTENT
 
     def mv(self, new, overwrite=True):
-        if isinstance(new, basestring):
-            new= self.__class__(new)
-        assert isinstance(new, self.__class__)
+        assert isinstance(new, basestring)
+        new= FileType(new)
         if overwrite and new.exists():
             new.rm()
         os.rename(self.path(), new.path())
         self.filetype= self.INEXISTENT
-        return self.__class__(new.path())
 
     def ls(self, sort_by_type=False):
         '''returns objects for the files contained in this directory, sorted ASCIIbetically.
@@ -100,41 +98,22 @@ class FileType(object):
             raise Exception("Doing ls() on a non-directory")
         p= self.path()
         paths= map(lambda x: os.path.join(p, x), sorted(os.listdir(p)))
-        objects= map(self.__class__, paths)
+        objects= map(FileType, paths)
         if sort_by_type:
-            objects= sorted(objects, key= self.__class__.sort_key)
+            objects= sorted(objects, key= FileType.sort_key)
         return objects
-    
+
+    def analog(self, destination):
+        '''let p be this file's relative path.
+        This function returns the absolute path of p, relative to DESTINATION (instead of the cwd, as usual)'''
+        p= self.path()
+        assert not os.path.isabs(p)
+        assert isinstance(destination, basestring)
+        return os.path.abspath(os.path.join(destination, p))
 
 class ConfigFile( FileType ):
-    def isDataDir(self):
-        '''is a data directory (see README)'''
-        p= self.path()
-        n= len(DATA_EXTENSION)
-        if p[-n:]==DATA_EXTENSION:
-            if not self.isDir():
-                raise Exception( p+': Detected a "data directory" that is not a directory')
-            logging.debug(p+" is a data directory")
-            return True
-        return False
-
-    def analog(self):
-        '''returns the equivalent path of the config file/dir in the home dir'''
-        p= self.path()
-        assert os.path.abspath(DIR1) in os.path.abspath(p)
-        if self.isDataDir():
-            p=p[:-len(DATA_EXTENSION)]
-        other= self.__class__(os.path.abspath(os.path.join(DIR2, p)))
-        #below: various checks before returning
-        if self.isBrokenLink():
-            self.rm()   
-        if self.isDir() and (not self.isDataDir()) and self.alreadyDone(other):
-            logging.warn("Up-to-date directory link detected on target, but the config files don't indicate it as a data directory. removing old link: "+other.path())
-            other.rm()
-        return other
-
     def isBackup(self):
-        return BACKUP_EXTENSION == self.path()[:-len(BACKUP_EXTENSION)]
+        return self.path().endswith(BACKUP_EXTENSION)
 
     def backup(self):
         p= self.path()
@@ -145,62 +124,106 @@ class ConfigFile( FileType ):
             raise Exception("Trying to backup a backup file: "+p)
         logging.warn("backing up "+p+" to "+np)
         self.mv(np)
-        
 
-    def alreadyDone(self, other=None):
-        other= other or self.analog()
-        if other.isLink() and self.sameFile(other):
-            logging.info("up-to-date symlink present: "+other.path())
+
+
+class ConfigFileDestination( ConfigFile ):
+    def __init__(self, path, original):
+        assert isinstance(original, ConfigFileOrigin)
+        FileType.__init__(self, path)
+        self.original= original
+        if self.isBrokenLink():
+            logging.warn("Removing broken link: "+str(self))
+            self.rm()
+        if original.isDir() and (not original.isDataDir()) and self.alreadyDone():
+            logging.warn("Up-to-date directory link detected on target, but the config files don't indicate it as a data directory. removing old link: "+self.path())
+            self.rm()
+
+    def alreadyDone(self):
+        if self.isLink() and self.sameFile(self.original):
+            logging.info("up-to-date symlink present: "+self.path())
             return True
         return False
 
-    def linkConfigFile(self, other=None):
-        other= other or self.analog()
-        p1= os.path.abspath(self.path())
-        p2= other.path()
+
+    def link(self):
+        logging.info("linked "+self.path())
+        p1= os.path.abspath(self.original.path())
+        p2= self.path()
         os.symlink(p1, p2)
 
 
+class ConfigFileOrigin( ConfigFile ):
+    def __init__(self, path, installer):
+        assert isinstance(installer, ConfigurationInstaller)
+        self.installer= installer
+        FileType.__init__(self, path)
 
-def process(f1):
-    f2= f1.analog()
-    if f1.isDir() and not f1.isDataDir():
-        logging.debug("processing directory "+str(f1))
-        if f2.exists():
-            if f2.isDir():
-                pass
+    def isDataDir(self):
+        result= self.path().endswith(DATA_EXTENSION)
+        if result and not self.isDir():
+            raise Exception( self.path()+': Detected a "data directory" that is not a directory')
+        return result
+
+    def analog(self):
+        analog_path= FileType.analog(self, self.installer.destination)
+        if self.isDataDir():
+            analog_path= analog_path[:-len(DATA_EXTENSION)]
+        return ConfigFileDestination( analog_path, self)
+
+    def process(self):
+        dest= self.analog()
+        if self.isDir() and not self.isDataDir():
+            logging.debug("processing directory "+str(self))
+            if dest.exists():
+                if dest.isDir():
+                    pass
+                else:
+                    dest.backup()
             else:
-                f2.backup()
+                dest.mkdir()
+        elif self.isFile() or self.isDataDir():
+            logging.debug("processing file "+str(self))
+            if not dest.alreadyDone():
+                if dest.exists():
+                    dest.backup()
+                dest.link()
         else:
-            f2.mkdir()
-    elif f1.isFile() or f1.isDataDir():
-        logging.debug("processing file "+str(f1))
-        if not f1.alreadyDone(f2):
-            if f2.exists():
-                f2.backup()
-            f1.linkConfigFile(f2)
-    else:
-        raise Exception("Can't copy config file; not directory nor file (maybe a link?): "+str(f1))
+            raise Exception("Can't copy config file; not directory nor file (maybe a link?): "+str(self))
 
 
-def recurse(base):
-    assert isinstance(base, ConfigFile)
-    assert base.isDir() # must already exist, now
-    files= base.ls(sort_by_type=False)
-    
-    for f in files:
-        process(f)
-        if f.isDir() and not f.isDataDir():
-            recurse(f)
+
+class ConfigurationInstaller:
+    def __init__(self, source, destination):
+        source, destination= os.path.abspath(source), os.path.abspath(destination)
+        os.chdir( source ) #will make relative paths relative to source
+        self.source= ConfigFileOrigin(".", self)
+        self.destination= destination
+
+    def do_it(self):
+        self.recurse( self.source, self.destination )
+
+    def recurse(self, source, destination):
+        assert isinstance(source, ConfigFileOrigin)
+        assert source.isDir() # must already exist, now
+        files= source.ls(sort_by_type=False)
+        for f in files:
+            c= ConfigFileOrigin( f.path(), self )
+            c.process()
+            if c.isDir() and not c.isDataDir():
+                self.recurse(c, destination)
+
+
 
 
 if __name__=="__main__":
-    assert "DIR1" in globals()
-    assert "DIR2" in globals()
-    if not os.path.isdir("config"):
-        raise Exception( '''Must have "config" directory inside current dir, where the config files reside. Make sure your current directory is right''')
-    os.chdir("config")
     logging.basicConfig(level=logging.INFO, format='%(levelname)s:\t%(message)s')
-    DIR2= os.path.abspath(DIR2)
-    recurse(ConfigFile(DIR1))
+    parser = argparse.ArgumentParser(description='''Links config files''')
+    parser.add_argument('source')
+    parser.add_argument('destination', nargs="?", default=os.path.expanduser("~/"))
         
+    args= parser.parse_args()
+
+    installer= ConfigurationInstaller( args.source, args.destination)
+    installer.do_it()
+
